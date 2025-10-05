@@ -13,7 +13,7 @@ This repository contains AWS CloudFormation templates for setting up VPC Flow Lo
 - [Analyzing Flow Logs with Amazon Athena](#analyzing-flow-logs-with-amazon-athena)
 - **[CloudWatch Logs Insights Query Cheatsheet](CLOUDWATCH_QUERIES.md)** 📊
 - **[Athena Incident Response & Investigation Queries](ATHENA_INCIDENT_RESPONSE.md)** 🔍
-- [Training with Public CloudTrail Dataset](#training-with-public-cloudtrail-dataset) 🎓
+- **[Training with Public CloudTrail Dataset (flaws.cloud)](#training-with-public-cloudtrail-dataset-flawscloud)** 🎓
 - [Troubleshooting](#troubleshooting)
 - [Additional Resources](#additional-resources)
 - [Security Best Practices](#security-best-practices)
@@ -592,23 +592,73 @@ The `protocol` field uses [IANA protocol numbers](https://www.iana.org/assignmen
 
 ---
 
-## Training with Public CloudTrail Dataset
+## Training with Public CloudTrail Dataset (flaws.cloud)
 
 Want to practice analyzing AWS security logs without setting up your own infrastructure? This repository includes scripts to download and analyze a public CloudTrail dataset from [flaws.cloud](http://flaws.cloud), a security training platform by Scott Piper.
 
+### What is the flaws Dataset?
+
+The flaws dataset is a collection of real CloudTrail logs from the flaws.cloud security training environment. It provides a safe, pre-generated dataset for:
+- **Learning CloudTrail analysis** without generating your own logs
+- **Testing security queries** and detection rules
+- **Training teams** on AWS security best practices
+- **Developing incident response playbooks** with realistic data
+
 ### Quick Setup
+
+The easiest way to set up the flaws dataset is using the Makefile:
 
 ```bash
 make setup-cloudtrail-demo BUCKET_NAME=my-training-bucket
 ```
 
-This command will:
+This single command will:
 1. Download ~200MB of real CloudTrail logs from June 2017
 2. Upload them to your S3 bucket
 3. Create an Athena database (`cloudtrail_demo`)
 4. Create a properly partitioned CloudTrail table
 5. Add all partitions automatically
 6. Run a test query to verify setup
+
+**Prerequisites**:
+- AWS CLI configured with valid credentials
+- An existing S3 bucket or permissions to create one
+- ~200MB of local disk space for download (optional with `--skip-download`)
+
+### Manual Setup
+
+For more control over the setup process, use the script directly:
+
+```bash
+# Basic setup
+bash scripts/setup-cloudtrail-dataset.sh --bucket my-training-bucket
+
+# Custom database and table names
+bash scripts/setup-cloudtrail-dataset.sh \
+  --bucket my-bucket \
+  --database security_training \
+  --table cloudtrail_events
+
+# Skip download if you already have the files
+bash scripts/setup-cloudtrail-dataset.sh \
+  --bucket my-bucket \
+  --skip-download
+
+# Clean up local files after upload
+bash scripts/setup-cloudtrail-dataset.sh \
+  --bucket my-bucket \
+  --cleanup
+```
+
+**Script Options:**
+- `--bucket` (required): S3 bucket name for uploading logs
+- `--database`: Athena database name (default: `cloudtrail_demo`)
+- `--table`: Athena table name (default: `cloudtrail_logs`)
+- `--region`: AWS region (default: `us-east-1`)
+- `--download-dir`: Local directory for downloads (default: `./data/cloudtrail`)
+- `--skip-download`: Skip download if data already exists locally
+- `--skip-upload`: Skip upload to S3 (use if already uploaded)
+- `--cleanup`: Delete local files after upload
 
 ### What's in the Dataset?
 
@@ -699,36 +749,48 @@ GROUP BY sourceipaddress
 ORDER BY request_count DESC;
 ```
 
-### Script Options
+### Using the Dataset
 
-The setup script supports several options for advanced use cases:
+Once setup is complete, you can start querying the CloudTrail logs immediately in Athena.
 
-```bash
-# Skip download if you already have the files
-bash scripts/setup-cloudtrail-dataset.sh \
-  --bucket my-bucket \
-  --skip-download
+**Accessing the Dataset:**
 
-# Custom database and table names
-bash scripts/setup-cloudtrail-dataset.sh \
-  --bucket my-bucket \
-  --database security_training \
-  --table cloudtrail_events
+1. Open the [Amazon Athena Console](https://console.aws.amazon.com/athena/)
+2. Select the database (default: `cloudtrail_demo`)
+3. Query the table (default: `cloudtrail_logs`)
 
-# Clean up local files after upload
-bash scripts/setup-cloudtrail-dataset.sh \
-  --bucket my-bucket \
-  --cleanup
-```
+**What You Can Learn:**
 
-### Learning Resources
+This dataset is perfect for practicing:
+- Identifying privilege escalation attempts
+- Tracking IAM changes and policy modifications
+- Analyzing failed authentication attempts
+- Finding unusual API calls or access patterns
+- Understanding CloudTrail log structure
+- Developing security detection queries
+- Creating incident response playbooks
 
-This dataset is perfect for:
-- **Security training**: Practice incident response and threat hunting
-- **CloudTrail analysis**: Learn CloudTrail log structure and analysis techniques
-- **SQL practice**: Improve your Athena/SQL query skills
-- **Testing detection rules**: Validate security detection logic
-- **Demo environments**: Show CloudTrail analysis capabilities
+### Troubleshooting the flaws Dataset
+
+**Dataset not downloading:**
+- Check internet connectivity
+- Verify curl or wget is installed
+- Try manually downloading from: https://summitroute.com/downloads/flaws_cloudtrail_logs.tar
+
+**No data in Athena queries:**
+- Verify S3 upload completed successfully: `aws s3 ls s3://YOUR-BUCKET/cloudtrail-demo/flaws.cloud/`
+- Check partitions were added: `SHOW PARTITIONS cloudtrail_demo.cloudtrail_logs;`
+- Confirm table location matches your bucket in the CREATE TABLE statement
+
+**Query fails with "HIVE_CANNOT_OPEN_SPLIT" error:**
+- Verify the S3 bucket path in the table location is correct
+- Check that CloudTrail logs are actually uploaded to S3
+- Ensure the Athena workgroup has permissions to read the S3 bucket
+
+**"Access Denied" errors:**
+- Verify your AWS credentials have S3 read/write permissions
+- Check the S3 bucket policy allows your AWS account
+- Ensure Athena has permissions to write query results to the results bucket
 
 ### Related Resources
 
