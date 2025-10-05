@@ -2,6 +2,32 @@
 
 This repository contains AWS CloudFormation templates for setting up VPC Flow Logs, a feature that captures information about the IP traffic going to and from network interfaces in your VPC.
 
+## Quick Start
+
+The easiest way to deploy VPC Flow Logs is using the included Makefile:
+
+```bash
+# Deploy to CloudWatch (for quick setup and testing)
+make deploy-cloudwatch VPC_ID=vpc-xxxxxxxxxxxxxxxxx
+
+# Deploy to S3 (recommended for production)
+make deploy-s3 VPC_ID=vpc-xxxxxxxxxxxxxxxxx BUCKET_NAME=my-flow-logs-bucket
+
+# Deploy to existing S3 bucket
+make deploy-s3-existing VPC_ID=vpc-xxxxxxxxxxxxxxxxx BUCKET_NAME=existing-bucket
+
+# Validate all templates
+make validate
+
+# Delete a stack
+make delete STACK_NAME=vpc-flow-logs
+
+# See all available commands
+make help
+```
+
+**Prerequisites**: AWS CLI installed and configured with appropriate credentials.
+
 ## What are VPC Flow Logs?
 
 VPC Flow Logs allow you to monitor and troubleshoot network traffic in your AWS Virtual Private Cloud (VPC). They capture metadata about the traffic flowing through your network, including:
@@ -45,6 +71,90 @@ Stores flow logs in S3 buckets for long-term storage and analysis.
 - Advanced analytics with tools like Amazon Athena
 - Multi-account organizations
 - Forensic analysis
+
+---
+
+## Using the Makefile
+
+This repository includes a Makefile that simplifies deployment and management of VPC Flow Logs. The Makefile wraps AWS CLI commands and provides a more user-friendly interface.
+
+### Available Commands
+
+Run `make help` to see all available commands and options.
+
+### Common Usage Examples
+
+#### 1. Deploy to CloudWatch (Simple)
+
+```bash
+make deploy-cloudwatch VPC_ID=vpc-0123456789abcdef0
+```
+
+With custom settings:
+```bash
+make deploy-cloudwatch \
+  VPC_ID=vpc-0123456789abcdef0 \
+  STACK_NAME=my-vpc-flow-logs \
+  RETENTION_DAYS=30 \
+  TRAFFIC_TYPE=REJECT \
+  REGION=us-west-2
+```
+
+#### 2. Deploy to S3 (Create New Bucket)
+
+```bash
+make deploy-s3 \
+  VPC_ID=vpc-0123456789abcdef0 \
+  BUCKET_NAME=my-flow-logs-bucket
+```
+
+With lifecycle policies:
+```bash
+make deploy-s3 \
+  VPC_ID=vpc-0123456789abcdef0 \
+  BUCKET_NAME=my-flow-logs-bucket \
+  RETENTION_DAYS=90 \
+  GLACIER_TRANSITION_DAYS=30 \
+  GLACIER_RETENTION_DAYS=365
+```
+
+#### 3. Deploy to Existing S3 Bucket
+
+```bash
+make deploy-s3-existing \
+  VPC_ID=vpc-0123456789abcdef0 \
+  BUCKET_NAME=existing-bucket-name
+```
+
+#### 4. Validate Templates Before Deployment
+
+```bash
+make validate
+```
+
+#### 5. Delete a Stack
+
+```bash
+make delete STACK_NAME=vpc-flow-logs
+```
+
+### Configuration Options
+
+You can customize deployments using these environment variables:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `STACK_NAME` | CloudFormation stack name | `vpc-flow-logs` |
+| `VPC_ID` | VPC ID (required for most commands) | - |
+| `REGION` | AWS region | `us-east-1` |
+| `RETENTION_DAYS` | Log retention period | `14` |
+| `TRAFFIC_TYPE` | Traffic to log: `ALL`, `ACCEPT`, or `REJECT` | `ALL` |
+| `BUCKET_NAME` | S3 bucket name | auto-generated |
+| `LIFECYCLE_ENABLED` | Enable S3 lifecycle policy | `Yes` |
+| `GLACIER_TRANSITION_DAYS` | Days before moving to Glacier | `30` |
+| `GLACIER_RETENTION_DAYS` | Days to retain in Glacier | `365` |
+| `VERSIONING_ENABLED` | Enable S3 versioning | `Yes` |
+| `OBJECT_LOCK` | Enable S3 object lock | `No` |
 
 ---
 
