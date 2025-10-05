@@ -1,4 +1,4 @@
-.PHONY: help validate deploy-cloudwatch deploy-s3 deploy-s3-production deploy-s3-security delete clean
+.PHONY: help validate deploy-cloudwatch deploy-s3 deploy-s3-production deploy-s3-security setup-athena setup-cloudtrail-demo delete clean
 
 # Variables
 STACK_NAME ?= vpc-flow-logs
@@ -12,6 +12,11 @@ GLACIER_TRANSITION_DAYS ?= 30
 GLACIER_RETENTION_DAYS ?= 365
 VERSIONING_ENABLED ?= Yes
 OBJECT_LOCK ?= No
+ACCOUNT_ID ?=
+DATABASE_NAME ?= vpc_flow_logs
+TABLE_NAME ?= flow_logs
+AUTO_PARTITION_DAYS ?= 7
+DOWNLOAD_DIR ?= ./data/cloudtrail
 
 help:
 	@echo "VPC Flow Logs Makefile"
@@ -23,6 +28,8 @@ help:
 	@echo "  deploy-s3-existing   - Deploy VPC Flow Logs to existing S3 bucket"
 	@echo "  deploy-s3-production - Deploy production account S3 bucket"
 	@echo "  deploy-s3-security   - Deploy security tools S3 bucket"
+	@echo "  setup-athena         - Bootstrap Athena database and table for VPC Flow Logs"
+	@echo "  setup-cloudtrail-demo - Download and setup public CloudTrail dataset for training"
 	@echo "  delete               - Delete the CloudFormation stack"
 	@echo "  clean                - Clean up local files"
 	@echo ""
@@ -38,10 +45,17 @@ help:
 	@echo "  GLACIER_RETENTION_DAYS  - Days to retain in Glacier (default: 365)"
 	@echo "  VERSIONING_ENABLED   - Enable S3 versioning (default: Yes)"
 	@echo "  OBJECT_LOCK          - Enable S3 object lock (default: No)"
+	@echo "  ACCOUNT_ID           - AWS Account ID (required for setup-athena)"
+	@echo "  DATABASE_NAME        - Athena database name (default: vpc_flow_logs)"
+	@echo "  TABLE_NAME           - Athena table name (default: flow_logs)"
+	@echo "  AUTO_PARTITION_DAYS  - Auto-create partitions for last N days (default: 7)"
+	@echo "  DOWNLOAD_DIR         - Directory for CloudTrail dataset downloads (default: ./data/cloudtrail)"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make deploy-cloudwatch VPC_ID=vpc-123456 STACK_NAME=my-flow-logs"
 	@echo "  make deploy-s3 VPC_ID=vpc-123456 BUCKET_NAME=my-flow-logs-bucket"
+	@echo "  make setup-athena BUCKET_NAME=my-flow-logs-bucket ACCOUNT_ID=123456789012"
+	@echo "  make setup-cloudtrail-demo BUCKET_NAME=my-training-bucket"
 	@echo "  make delete STACK_NAME=my-flow-logs"
 
 validate:
@@ -180,6 +194,51 @@ endif
 	@echo "Stack creation initiated. Monitor progress with:"
 	@echo "  aws cloudformation wait stack-create-complete --stack-name $(STACK_NAME)-security --region $(REGION)"
 
+setup-athena:
+ifndef BUCKET_NAME
+	$(error BUCKET_NAME is required. Usage: make setup-athena BUCKET_NAME=my-bucket ACCOUNT_ID=123456789012)
+endif
+ifndef ACCOUNT_ID
+	$(error ACCOUNT_ID is required. Usage: make setup-athena BUCKET_NAME=my-bucket ACCOUNT_ID=123456789012)
+endif
+	@echo "Setting up Athena for VPC Flow Logs analysis..."
+	@echo "Bucket: $(BUCKET_NAME)"
+	@echo "Account ID: $(ACCOUNT_ID)"
+	@echo "Region: $(REGION)"
+	@echo "Database: $(DATABASE_NAME)"
+	@echo "Table: $(TABLE_NAME)"
+	@echo "Auto-partition last $(AUTO_PARTITION_DAYS) days"
+	@echo ""
+	@bash scripts/setup-athena-table.sh \
+		--bucket $(BUCKET_NAME) \
+		--account-id $(ACCOUNT_ID) \
+		--region $(REGION) \
+		--database $(DATABASE_NAME) \
+		--table $(TABLE_NAME) \
+		--auto-partitions $(AUTO_PARTITION_DAYS)
+
+setup-cloudtrail-demo:
+ifndef BUCKET_NAME
+	$(error BUCKET_NAME is required. Usage: make setup-cloudtrail-demo BUCKET_NAME=my-bucket)
+endif
+	@echo "Setting up public CloudTrail dataset from flaws.cloud..."
+	@echo "Bucket: $(BUCKET_NAME)"
+	@echo "Region: $(REGION)"
+	@echo "Download Directory: $(DOWNLOAD_DIR)"
+	@echo ""
+	@echo "This will:"
+	@echo "  1. Download ~200MB CloudTrail dataset from Summit Route"
+	@echo "  2. Upload to S3 bucket: $(BUCKET_NAME)"
+	@echo "  3. Create Athena database and table"
+	@echo "  4. Add partitions for all dates in dataset"
+	@echo ""
+	@bash scripts/setup-cloudtrail-dataset.sh \
+		--bucket $(BUCKET_NAME) \
+		--region $(REGION) \
+		--download-dir $(DOWNLOAD_DIR) \
+		--database cloudtrail_demo \
+		--table cloudtrail_logs
+
 delete:
 	@echo "Deleting CloudFormation stack: $(STACK_NAME)"
 	@echo "Region: $(REGION)"
@@ -199,4 +258,5 @@ delete:
 clean:
 	@echo "Cleaning up..."
 	@find . -name ".DS_Store" -delete
+	@rm -rf $(DOWNLOAD_DIR)
 	@echo "Done."

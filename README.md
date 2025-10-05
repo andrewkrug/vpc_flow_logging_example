@@ -2,6 +2,22 @@
 
 This repository contains AWS CloudFormation templates for setting up VPC Flow Logs, a feature that captures information about the IP traffic going to and from network interfaces in your VPC.
 
+## Table of Contents
+
+- [Quick Start](#quick-start)
+- [What are VPC Flow Logs?](#what-are-vpc-flow-logs)
+- [Templates Overview](#templates-overview)
+- [Using the Makefile](#using-the-makefile)
+- [Template 1: VPC Flow Logs to CloudWatch](#template-1-vpc-flow-logs-to-cloudwatch)
+- [Template 2: VPC Flow Logs to S3](#template-2-vpc-flow-logs-to-s3)
+- [Analyzing Flow Logs with Amazon Athena](#analyzing-flow-logs-with-amazon-athena)
+- **[CloudWatch Logs Insights Query Cheatsheet](CLOUDWATCH_QUERIES.md)** 📊
+- **[Athena Incident Response & Investigation Queries](ATHENA_INCIDENT_RESPONSE.md)** 🔍
+- [Training with Public CloudTrail Dataset](#training-with-public-cloudtrail-dataset) 🎓
+- [Troubleshooting](#troubleshooting)
+- [Additional Resources](#additional-resources)
+- [Security Best Practices](#security-best-practices)
+
 ## Quick Start
 
 The easiest way to deploy VPC Flow Logs is using the included Makefile:
@@ -126,13 +142,39 @@ make deploy-s3-existing \
   BUCKET_NAME=existing-bucket-name
 ```
 
-#### 4. Validate Templates Before Deployment
+#### 4. Setup Athena for Analysis
+
+After deploying VPC Flow Logs to S3, bootstrap Athena for SQL-based analysis:
+
+```bash
+make setup-athena \
+  BUCKET_NAME=my-flow-logs-bucket \
+  ACCOUNT_ID=123456789012
+```
+
+This will:
+- Create an Athena database (`vpc_flow_logs` by default)
+- Create a partitioned table for VPC Flow Logs
+- Enable partition projection for automatic partition discovery
+- Optionally create partitions for the last 7 days
+
+Custom configuration:
+```bash
+make setup-athena \
+  BUCKET_NAME=my-flow-logs-bucket \
+  ACCOUNT_ID=123456789012 \
+  DATABASE_NAME=security_logs \
+  TABLE_NAME=vpc_flows \
+  AUTO_PARTITION_DAYS=30
+```
+
+#### 5. Validate Templates Before Deployment
 
 ```bash
 make validate
 ```
 
-#### 5. Delete a Stack
+#### 6. Delete a Stack
 
 ```bash
 make delete STACK_NAME=vpc-flow-logs
@@ -155,6 +197,10 @@ You can customize deployments using these environment variables:
 | `GLACIER_RETENTION_DAYS` | Days to retain in Glacier | `365` |
 | `VERSIONING_ENABLED` | Enable S3 versioning | `Yes` |
 | `OBJECT_LOCK` | Enable S3 object lock | `No` |
+| `ACCOUNT_ID` | AWS Account ID (for Athena setup) | - |
+| `DATABASE_NAME` | Athena database name | `vpc_flow_logs` |
+| `TABLE_NAME` | Athena table name | `flow_logs` |
+| `AUTO_PARTITION_DAYS` | Auto-create partitions for last N days | `7` |
 
 ---
 
@@ -543,6 +589,152 @@ The `protocol` field uses [IANA protocol numbers](https://www.iana.org/assignmen
 - **Monitor query costs**: Athena charges $5 per TB of data scanned
 
 **Athena Pricing**: [Amazon Athena Pricing](https://aws.amazon.com/athena/pricing/)
+
+---
+
+## Training with Public CloudTrail Dataset
+
+Want to practice analyzing AWS security logs without setting up your own infrastructure? This repository includes scripts to download and analyze a public CloudTrail dataset from [flaws.cloud](http://flaws.cloud), a security training platform by Scott Piper.
+
+### Quick Setup
+
+```bash
+make setup-cloudtrail-demo BUCKET_NAME=my-training-bucket
+```
+
+This command will:
+1. Download ~200MB of real CloudTrail logs from June 2017
+2. Upload them to your S3 bucket
+3. Create an Athena database (`cloudtrail_demo`)
+4. Create a properly partitioned CloudTrail table
+5. Add all partitions automatically
+6. Run a test query to verify setup
+
+### What's in the Dataset?
+
+- **Source**: flaws.cloud security training environment
+- **AWS Account**: 811596193553
+- **Region**: us-west-2
+- **Date Range**: June 2017
+- **Records**: ~10,000+ CloudTrail events
+- **Size**: ~200MB compressed, ~2GB uncompressed
+
+### Example Training Queries
+
+Once setup is complete, try these queries in Athena:
+
+#### Find all events by a specific user
+
+```sql
+SELECT eventname, sourceipaddress, eventtime, requestparameters
+FROM cloudtrail_demo.cloudtrail_logs
+WHERE useridentity.arn = 'arn:aws:iam::811596193553:user/Level6'
+ORDER BY eventtime;
+```
+
+#### Identify failed API calls
+
+```sql
+SELECT
+  eventname,
+  errorcode,
+  errormessage,
+  COUNT(*) as failure_count
+FROM cloudtrail_demo.cloudtrail_logs
+WHERE errorcode IS NOT NULL
+GROUP BY eventname, errorcode, errormessage
+ORDER BY failure_count DESC;
+```
+
+#### Track IAM changes
+
+```sql
+SELECT
+  eventtime,
+  eventname,
+  useridentity.arn,
+  sourceipaddress,
+  requestparameters,
+  responseelements
+FROM cloudtrail_demo.cloudtrail_logs
+WHERE eventsource = 'iam.amazonaws.com'
+ORDER BY eventtime;
+```
+
+#### Find privilege escalation attempts
+
+```sql
+SELECT
+  eventtime,
+  eventname,
+  useridentity.arn,
+  sourceipaddress,
+  errorcode
+FROM cloudtrail_demo.cloudtrail_logs
+WHERE eventname IN (
+  'PutUserPolicy',
+  'PutRolePolicy',
+  'CreateAccessKey',
+  'CreateLoginProfile',
+  'UpdateAssumeRolePolicy',
+  'AttachUserPolicy',
+  'AttachRolePolicy'
+)
+ORDER BY eventtime;
+```
+
+#### Analyze access from external IPs
+
+```sql
+SELECT
+  sourceipaddress,
+  COUNT(*) as request_count,
+  COUNT(DISTINCT eventname) as unique_actions,
+  COUNT(DISTINCT useridentity.arn) as unique_identities
+FROM cloudtrail_demo.cloudtrail_logs
+WHERE sourceipaddress NOT LIKE '10.%'
+  AND sourceipaddress NOT LIKE '172.16.%'
+  AND sourceipaddress NOT LIKE '192.168.%'
+GROUP BY sourceipaddress
+ORDER BY request_count DESC;
+```
+
+### Script Options
+
+The setup script supports several options for advanced use cases:
+
+```bash
+# Skip download if you already have the files
+bash scripts/setup-cloudtrail-dataset.sh \
+  --bucket my-bucket \
+  --skip-download
+
+# Custom database and table names
+bash scripts/setup-cloudtrail-dataset.sh \
+  --bucket my-bucket \
+  --database security_training \
+  --table cloudtrail_events
+
+# Clean up local files after upload
+bash scripts/setup-cloudtrail-dataset.sh \
+  --bucket my-bucket \
+  --cleanup
+```
+
+### Learning Resources
+
+This dataset is perfect for:
+- **Security training**: Practice incident response and threat hunting
+- **CloudTrail analysis**: Learn CloudTrail log structure and analysis techniques
+- **SQL practice**: Improve your Athena/SQL query skills
+- **Testing detection rules**: Validate security detection logic
+- **Demo environments**: Show CloudTrail analysis capabilities
+
+### Related Resources
+
+- **Blog Post**: [Public Dataset of CloudTrail Logs from flaws.cloud](https://summitroute.com/blog/2020/10/09/public_dataset_of_cloudtrail_logs_from_flaws_cloud/) by Scott Piper
+- **Training Site**: [flaws.cloud](http://flaws.cloud) - AWS security challenges
+- **Author**: Scott Piper ([@0xdabbad00](https://twitter.com/0xdabbad00))
 
 ---
 
