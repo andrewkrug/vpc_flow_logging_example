@@ -1,0 +1,189 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Deploy VPC Flow Logs to S3 with optional bucket creation and lifecycle management.'
+
+Parameters:
+  VpcId:
+    Description: 'The VPC ID to enable flow logging on.'
+    Type: String
+
+  TrafficType:
+    Description: 'The type of traffic to log.'
+    Type: String
+    Default: ALL
+    AllowedValues:
+      - ACCEPT
+      - REJECT
+      - ALL
+
+  CreateBucket:
+    Description: 'Create a new S3 bucket for flow logs? If No, you must specify an existing BucketName.'
+    Type: String
+    Default: 'Yes'
+    AllowedValues:
+      - 'Yes'
+      - 'No'
+
+  BucketName:
+    Description: 'Name of the S3 bucket. If CreateBucket=Yes, this name will be used for the new bucket. If CreateBucket=No, this should be an existing bucket with proper permissions.'
+    Type: String
+    Default: ''
+
+  EnableLifecyclePolicy:
+    Description: 'Enable lifecycle policies for automated retention management?'
+    Type: String
+    Default: 'Yes'
+    AllowedValues:
+      - 'Yes'
+      - 'No'
+
+  RetentionInDays:
+    Description: 'Number of days to retain flow logs in standard S3 storage before expiration.'
+    Type: Number
+    Default: 90
+    MinValue: 1
+
+  GlacierTransitionDays:
+    Description: 'Number of days before transitioning to Glacier storage (0 to disable Glacier transition).'
+    Type: Number
+    Default: 30
+    MinValue: 0
+
+  GlacierRetentionDays:
+    Description: 'Number of days to retain in Glacier before deletion (only applies if GlacierTransitionDays > 0).'
+    Type: Number
+    Default: 365
+    MinValue: 1
+
+  EnableVersioning:
+    Description: 'Enable versioning on the S3 bucket for additional data protection?'
+    Type: String
+    Default: 'Yes'
+    AllowedValues:
+      - 'Yes'
+      - 'No'
+
+  ObjectLock:
+    Description: 'Enable object lock for compliance and tamper protection? (Can only be set during bucket creation, not updatable)'
+    Type: String
+    Default: 'No'
+    AllowedValues:
+      - 'Yes'
+      - 'No'
+
+Conditions:
+  ShouldCreateBucket: !Equals [!Ref CreateBucket, 'Yes']
+  ShouldEnableLifecycle: !Equals [!Ref EnableLifecyclePolicy, 'Yes']
+  ShouldEnableVersioning: !Equals [!Ref EnableVersioning, 'Yes']
+  ShouldEnableObjectLock: !Equals [!Ref ObjectLock, 'Yes']
+  ShouldUseGlacier: !Not [!Equals [!Ref GlacierTransitionDays, 0]]
+  HasBucketName: !Not [!Equals [!Ref BucketName, '']]
+  ShouldCreateLifecycle: !And
+    - !Condition ShouldCreateBucket
+    - !Condition ShouldEnableLifecycle
+
+Resources:
+  FlowLogsBucket:
+    Type: AWS::S3::Bucket
+    Condition: ShouldCreateBucket
+    Properties:
+      BucketName: !If
+        - HasBucketName
+        - !Ref BucketName
+        - !Sub 'vpc-flow-logs-${AWS::AccountId}-${AWS::Region}'
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerPreferred
+      ObjectLockEnabled: !If [ShouldEnableObjectLock, true, false]
+      LifecycleConfiguration: !If
+        - ShouldCreateLifecycle
+        - Rules:
+            - Id: StandardRetention
+              Status: Enabled
+              ExpirationInDays: !Ref RetentionInDays
+              NoncurrentVersionExpirationInDays: !If [ShouldEnableVersioning, !Ref RetentionInDays, !Ref 'AWS::NoValue']
+              Transitions: !If
+                - ShouldUseGlacier
+                - - TransitionInDays: !Ref GlacierTransitionDays
+                    StorageClass: GLACIER
+                - !Ref 'AWS::NoValue'
+            - !If
+              - ShouldUseGlacier
+              - Id: GlacierRetention
+                Status: Enabled
+                Prefix: glacier/
+                ExpirationInDays: !Ref GlacierRetentionDays
+                Transitions:
+                  - TransitionInDays: 1
+                    StorageClass: GLACIER
+              - !Ref 'AWS::NoValue'
+        - !Ref 'AWS::NoValue'
+      VersioningConfiguration: !If
+        - ShouldEnableVersioning
+        - Status: Enabled
+        - !Ref 'AWS::NoValue'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+    DeletionPolicy: Retain
+
+  BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Condition: ShouldCreateBucket
+    Properties:
+      Bucket: !Ref FlowLogsBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AWSLogDeliveryAclCheck
+            Effect: Allow
+            Principal:
+              Service: delivery.logs.amazonaws.com
+            Action: s3:GetBucketAcl
+            Resource: !GetAtt FlowLogsBucket.Arn
+          - Sid: AWSLogDeliveryWrite
+            Effect: Allow
+            Principal:
+              Service: delivery.logs.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub '${FlowLogsBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                s3:x-amz-acl: bucket-owner-full-control
+
+  FlowLog:
+    Type: AWS::EC2::FlowLog
+    Properties:
+      ResourceId: !Ref VpcId
+      ResourceType: VPC
+      TrafficType: !Ref TrafficType
+      LogDestinationType: s3
+      LogDestination: !If
+        - ShouldCreateBucket
+        - !GetAtt FlowLogsBucket.Arn
+        - !Sub 'arn:aws:s3:::${BucketName}'
+
+Outputs:
+  BucketName:
+    Description: 'The name of the S3 bucket storing VPC flow logs.'
+    Value: !If
+      - ShouldCreateBucket
+      - !Ref FlowLogsBucket
+      - !Ref BucketName
+
+  BucketArn:
+    Description: 'The ARN of the S3 bucket storing VPC flow logs.'
+    Value: !If
+      - ShouldCreateBucket
+      - !GetAtt FlowLogsBucket.Arn
+      - !Sub 'arn:aws:s3:::${BucketName}'
+
+  FlowLogId:
+    Description: 'The ID of the VPC Flow Log.'
+    Value: !Ref FlowLog
+
+  VpcId:
+    Description: 'The VPC ID that flow logging is enabled on.'
+    Value: !Ref VpcId
