@@ -104,7 +104,7 @@ Resources:
               NoncurrentVersionExpirationInDays: !If [ShouldEnableVersioning, !If [ShouldUseGlacier, !Ref GlacierRetentionDays, !Ref RetentionInDays], !Ref 'AWS::NoValue']
               Transitions: !If
                 - ShouldUseGlacier
-                - - Days: !Ref GlacierTransitionDays
+                - - TransitionInDays: !Ref GlacierTransitionDays
                     StorageClass: GLACIER
                 - !Ref 'AWS::NoValue'
         - !Ref 'AWS::NoValue'
