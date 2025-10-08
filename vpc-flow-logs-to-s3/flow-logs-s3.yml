@@ -100,23 +100,13 @@ Resources:
         - Rules:
             - Id: StandardRetention
               Status: Enabled
-              ExpirationInDays: !Ref RetentionInDays
-              NoncurrentVersionExpirationInDays: !If [ShouldEnableVersioning, !Ref RetentionInDays, !Ref 'AWS::NoValue']
+              ExpirationInDays: !If [ShouldUseGlacier, !Ref GlacierRetentionDays, !Ref RetentionInDays]
+              NoncurrentVersionExpirationInDays: !If [ShouldEnableVersioning, !If [ShouldUseGlacier, !Ref GlacierRetentionDays, !Ref RetentionInDays], !Ref 'AWS::NoValue']
               Transitions: !If
                 - ShouldUseGlacier
-                - - TransitionInDays: !Ref GlacierTransitionDays
+                - - Days: !Ref GlacierTransitionDays
                     StorageClass: GLACIER
                 - !Ref 'AWS::NoValue'
-            - !If
-              - ShouldUseGlacier
-              - Id: GlacierRetention
-                Status: Enabled
-                Prefix: glacier/
-                ExpirationInDays: !Ref GlacierRetentionDays
-                Transitions:
-                  - TransitionInDays: 1
-                    StorageClass: GLACIER
-              - !Ref 'AWS::NoValue'
         - !Ref 'AWS::NoValue'
       VersioningConfiguration: !If
         - ShouldEnableVersioning
